@@ -9,7 +9,6 @@ npm install
 npm run compile
 ```
 
-Then press **F5** to launch a dev host, or package and install permanently:
 
 ```bash
 npm install -g @vscode/vsce
