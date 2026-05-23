@@ -3,12 +3,8 @@
   "displayName": "C++ Add Include Path",
   "description": "Right-click a folder in Explorer to add it to C/C++ IntelliSense include paths",
   "version": "0.1.0",
-  "engines": {
-    "vscode": "^1.75.0"
-  },
-  "categories": [
-    "Other"
-  ],
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Other"],
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
@@ -16,12 +12,21 @@
       {
         "command": "cppInclude.addToIncludePath",
         "title": "Add to C/C++ Include Path"
+      },
+      {
+        "command": "cppInclude.addToIncludePathRecursive",
+        "title": "Recursively Add to C/C++ Include Path"
       }
     ],
     "menus": {
       "explorer/context": [
         {
           "command": "cppInclude.addToIncludePath",
+          "when": "explorerResourceIsFolder",
+          "group": "7_modification"
+        },
+        {
+          "command": "cppInclude.addToIncludePathRecursive",
           "when": "explorerResourceIsFolder",
           "group": "7_modification"
         }
@@ -32,8 +37,8 @@
     "compile": "tsc -p ./"
   },
   "devDependencies": {
-    "@types/node": "^18.19.130",
+    "@types/node": "^18.0.0",
     "@types/vscode": "^1.75.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.0.0"
   }
 }

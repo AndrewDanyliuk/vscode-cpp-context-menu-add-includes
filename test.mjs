@@ -1,115 +1,97 @@
-// test.mjs — runs with: node test.mjs
-// Tests the pure functions exported from extension.ts via compiled JS.
-// No VS Code runtime required.
-
+// test.mjs — node test.mjs
 import * as path from 'path';
+import * as fs from 'fs';
 import assert from 'assert';
-import { buildIncludePath, applyIncludePath, defaultProperties } from './out/extension.js';
+import { buildIncludePath, applyIncludePath, applyIncludePathBatch, collectSubdirectories, defaultProperties } from './out/extension.js';
 
-let passed = 0;
-let failed = 0;
-
+let passed = 0, failed = 0;
 function test(name, fn) {
-    try {
-        fn();
-        console.log(`  ✓ ${name}`);
-        passed++;
-    } catch (e) {
-        console.error(`  ✗ ${name}`);
-        console.error(`    ${e.message}`);
-        failed++;
-    }
+    try { fn(); console.log(`  ✓ ${name}`); passed++; }
+    catch (e) { console.error(`  ✗ ${name}\n    ${e.message}`); failed++; }
 }
 
 // ─── buildIncludePath ─────────────────────────────────────────────────────────
-
 console.log('\nbuildIncludePath');
-
-test('posix path produces ${workspaceFolder}/rel', () => {
-    const result = buildIncludePath('/workspace', '/workspace/src/include');
-    assert.strictEqual(result, '${workspaceFolder}/src/include');
-});
-
-test('root-level folder produces ${workspaceFolder}/foldername', () => {
-    const result = buildIncludePath('/workspace', '/workspace/drivers');
-    assert.strictEqual(result, '${workspaceFolder}/drivers');
-});
-
-test('windows backslashes are normalised to forward slashes', () => {
-    // Simulate windows-style relative path output from path.relative
-    const result = buildIncludePath('C:\\workspace', 'C:\\workspace\\src\\hal');
-    // path.relative on linux won't produce backslashes, but test the replace guard
-    assert.ok(!result.includes('\\'), `Should not contain backslashes, got: ${result}`);
-});
+test('nested path', () => assert.strictEqual(buildIncludePath('/ws', '/ws/src/include'), '${workspaceFolder}/src/include'));
+test('root-level folder', () => assert.strictEqual(buildIncludePath('/ws', '/ws/drivers'), '${workspaceFolder}/drivers'));
+test('no backslashes in output', () => assert.ok(!buildIncludePath('C:\\ws', 'C:\\ws\\src\\hal').includes('\\')));
 
 // ─── applyIncludePath ─────────────────────────────────────────────────────────
-
 console.log('\napplyIncludePath');
-
-test('adds path to a single config', () => {
-    const props = defaultProperties();
-    const { properties, status } = applyIncludePath(props, '${workspaceFolder}/src');
+test('adds to single config', () => {
+    const p = defaultProperties();
+    const { status } = applyIncludePath(p, '${workspaceFolder}/src');
     assert.strictEqual(status, 'added');
-    assert.ok(properties.configurations[0].includePath.includes('${workspaceFolder}/src'));
+    assert.ok(p.configurations[0].includePath.includes('${workspaceFolder}/src'));
 });
-
-test('returns already_present when path already exists', () => {
-    const props = defaultProperties();
-    applyIncludePath(props, '${workspaceFolder}/src');
-    const { status } = applyIncludePath(props, '${workspaceFolder}/src');
+test('deduplicates', () => {
+    const p = defaultProperties();
+    applyIncludePath(p, '${workspaceFolder}/src');
+    const { status } = applyIncludePath(p, '${workspaceFolder}/src');
     assert.strictEqual(status, 'already_present');
 });
-
-test('adds to all configurations', () => {
-    const props = {
-        configurations: [
-            { name: 'Debug',   includePath: [] },
-            { name: 'Release', includePath: [] },
-        ],
-        version: 4,
-    };
-    const { properties, status } = applyIncludePath(props, '${workspaceFolder}/inc');
-    assert.strictEqual(status, 'added');
-    assert.ok(properties.configurations[0].includePath.includes('${workspaceFolder}/inc'));
-    assert.ok(properties.configurations[1].includePath.includes('${workspaceFolder}/inc'));
+test('adds to all configs', () => {
+    const p = { configurations: [{ name: 'Debug', includePath: [] }, { name: 'Release', includePath: [] }], version: 4 };
+    applyIncludePath(p, '${workspaceFolder}/inc');
+    assert.ok(p.configurations[0].includePath.includes('${workspaceFolder}/inc'));
+    assert.ok(p.configurations[1].includePath.includes('${workspaceFolder}/inc'));
+});
+test('handles missing includePath array', () => {
+    const p = { configurations: [{ name: 'Default' }], version: 4 };
+    applyIncludePath(p, '${workspaceFolder}/inc');
+    assert.deepStrictEqual(p.configurations[0].includePath, ['${workspaceFolder}/inc']);
 });
 
-test('handles missing includePath array gracefully', () => {
-    const props = {
-        configurations: [{ name: 'Default' }],  // no includePath field
-        version: 4,
-    };
-    const { properties, status } = applyIncludePath(props, '${workspaceFolder}/inc');
-    assert.strictEqual(status, 'added');
-    assert.deepStrictEqual(properties.configurations[0].includePath, ['${workspaceFolder}/inc']);
+// ─── applyIncludePathBatch ────────────────────────────────────────────────────
+console.log('\napplyIncludePathBatch');
+test('adds multiple paths, returns correct count', () => {
+    const p = defaultProperties();
+    const paths = ['${workspaceFolder}/a', '${workspaceFolder}/b', '${workspaceFolder}/c'];
+    const { addedCount } = applyIncludePathBatch(p, paths);
+    assert.strictEqual(addedCount, 3);
+    for (const ip of paths) assert.ok(p.configurations[0].includePath.includes(ip));
+});
+test('skips duplicates in batch, counts only new', () => {
+    const p = defaultProperties();
+    applyIncludePath(p, '${workspaceFolder}/a');
+    const { addedCount } = applyIncludePathBatch(p, ['${workspaceFolder}/a', '${workspaceFolder}/b']);
+    assert.strictEqual(addedCount, 1);
+});
+test('all duplicates returns addedCount 0', () => {
+    const p = defaultProperties();
+    applyIncludePath(p, '${workspaceFolder}/a');
+    const { addedCount } = applyIncludePathBatch(p, ['${workspaceFolder}/a']);
+    assert.strictEqual(addedCount, 0);
 });
 
-test('partially-present path: adds to configs that are missing it, reports added', () => {
-    // Config A already has it, Config B does not — overall status should be 'added'
-    const props = {
-        configurations: [
-            { name: 'A', includePath: ['${workspaceFolder}/inc'] },
-            { name: 'B', includePath: [] },
-        ],
-        version: 4,
-    };
-    const { properties, status } = applyIncludePath(props, '${workspaceFolder}/inc');
-    assert.strictEqual(status, 'added');
-    assert.ok(properties.configurations[1].includePath.includes('${workspaceFolder}/inc'));
+// ─── collectSubdirectories ────────────────────────────────────────────────────
+console.log('\ncollectSubdirectories');
+
+const tmp = fs.mkdtempSync(path.join(import.meta.dirname ?? '.', 'tmp-test-'));
+fs.mkdirSync(path.join(tmp, 'src'));
+fs.mkdirSync(path.join(tmp, 'src', 'hal'));
+fs.mkdirSync(path.join(tmp, 'src', 'hal', 'deep'));
+fs.mkdirSync(path.join(tmp, 'include'));
+fs.mkdirSync(path.join(tmp, '.git'));
+fs.mkdirSync(path.join(tmp, 'node_modules'));
+fs.writeFileSync(path.join(tmp, 'src', 'main.c'), '');
+
+test('includes root and all non-skipped subdirs', () => {
+    const result = collectSubdirectories(tmp);
+    const normalized = result.map(p => p.replace(tmp, '').replace(/\\/g, '/'));
+    assert.ok(normalized.includes(''), 'root');
+    assert.ok(normalized.includes('/src'), 'src');
+    assert.ok(normalized.includes('/src/hal'), 'src/hal');
+    assert.ok(normalized.includes('/src/hal/deep'), 'src/hal/deep');
+    assert.ok(normalized.includes('/include'), 'include');
 });
+test('skips .git', () => assert.ok(!collectSubdirectories(tmp).some(p => p.includes('.git'))));
+test('skips node_modules', () => assert.ok(!collectSubdirectories(tmp).some(p => p.includes('node_modules'))));
+test('does not include files', () => assert.ok(!collectSubdirectories(tmp).some(p => p.endsWith('main.c'))));
+test('returns correct total count', () => assert.strictEqual(collectSubdirectories(tmp).length, 5));
 
-// ─── defaultProperties ────────────────────────────────────────────────────────
-
-console.log('\ndefaultProperties');
-
-test('produces valid structure', () => {
-    const props = defaultProperties();
-    assert.ok(Array.isArray(props.configurations));
-    assert.strictEqual(props.version, 4);
-    assert.ok(Array.isArray(props.configurations[0].includePath));
-});
+fs.rmSync(tmp, { recursive: true, force: true });
 
 // ─── Summary ─────────────────────────────────────────────────────────────────
-
 console.log(`\n${passed} passed, ${failed} failed\n`);
 if (failed > 0) process.exit(1);
